@@ -3,16 +3,16 @@
 -- [[ Features: Full Aimbot, Triggerbot, Anti-Aim, Strafe, Working ESP ]]
 
 --// Cache
-local select = select
-local pcall, getgenv, next, Vector2, mathclamp, type, mousemoverel = select(1, pcall, getgenv, next, Vector2.new, math.clamp, type, mousemoverel or (Input and Input.MouseMove))
+local pcall = pcall
+local next = next
+local Vector2 = Vector2.new
+local mathclamp = math.clamp
 local mathfloor = math.floor
 local mathcos = math.cos
 local mathsin = math.sin
 local mathrandom = math.random
 local mathrad = math.rad
-local mathhuge = math.huge
-local tableinsert = table.insert
-local tablesort = table.sort
+local mousemoverel = mousemoverel or (Input and Input.MouseMove)
 
 --// Services
 local RunService = game:GetService("RunService")
@@ -106,6 +106,14 @@ local antiAimConnection = nil
 local strafeAngle = 0
 local strafeTime = 0
 
+local DefaultLighting = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    GlobalShadows = Lighting.GlobalShadows,
+    FogEnd = Lighting.FogEnd
+}
+local fullbrightApplied = false
+
 --// UI Theme
 local Theme = {
     Main = Color3.fromRGB(15, 15, 15),
@@ -118,10 +126,15 @@ local Theme = {
 --== UI CREATION ==--
 --====================================================
 
+local ExistingGui = (game:GetService("CoreGui"):FindFirstChild("KilHub_V7_6") or LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("KilHub_V7_6"))
+if ExistingGui then
+    ExistingGui:Destroy()
+end
+
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "KilHub_V7_6"
 ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = game:GetService("CoreGui") or LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.Parent = game:GetService("CoreGui")
 
 -- Menu Frame
 local Main = Instance.new("Frame", ScreenGui)
@@ -174,7 +187,10 @@ local function OpenPage(name)
             v.Visible = false
         end
     end
-    Container:FindFirstChild(name .. "Page").Visible = true
+    local page = Container:FindFirstChild(name .. "Page")
+    if page then
+        page.Visible = true
+    end
 end
 
 local function CreateTab(name, order)
@@ -271,6 +287,7 @@ local function AddSlider(parent, text, configTable, configKey, min, max, suffix,
     Button.Text = ""
     
     local dragging = false
+    local dragConnection
     Button.MouseButton1Down:Connect(function()
         dragging = true
     end)
@@ -280,8 +297,13 @@ local function AddSlider(parent, text, configTable, configKey, min, max, suffix,
             dragging = false
         end
     end)
-    
-    RunService.RenderStepped:Connect(function()
+
+    dragConnection = RunService.RenderStepped:Connect(function()
+        if not F.Parent then
+            dragConnection:Disconnect()
+            return
+        end
+
         if dragging then
             local mousePos = UserInputService:GetMouseLocation()
             local absPos = Slider.AbsolutePosition
@@ -295,6 +317,8 @@ local function AddSlider(parent, text, configTable, configKey, min, max, suffix,
         end
     end)
 end
+
+local openDropdown
 
 local function AddDropdown(parent, text, configTable, configKey, options)
     local F = Instance.new("Frame", parent)
@@ -329,7 +353,13 @@ local function AddDropdown(parent, text, configTable, configKey, options)
         if dropdownOpen then
             if dropdownFrame then dropdownFrame:Destroy() end
             dropdownOpen = false
+            openDropdown = nil
             return
+        end
+
+        if openDropdown and openDropdown ~= dropdownFrame then
+            openDropdown:Destroy()
+            openDropdown = nil
         end
         
         dropdownFrame = Instance.new("Frame", ScreenGui)
@@ -360,9 +390,29 @@ local function AddDropdown(parent, text, configTable, configKey, options)
             end)
         end
         
+        openDropdown = dropdownFrame
         dropdownOpen = true
     end)
 end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+    if openDropdown and openDropdown.Parent then
+        local mousePos = UserInputService:GetMouseLocation()
+        local pos = openDropdown.AbsolutePosition
+        local size = openDropdown.AbsoluteSize
+
+        local insideX = mousePos.X >= pos.X and mousePos.X <= (pos.X + size.X)
+        local insideY = mousePos.Y >= pos.Y and mousePos.Y <= (pos.Y + size.Y)
+        if insideX and insideY then
+            return
+        end
+
+        openDropdown:Destroy()
+        openDropdown = nil
+    end
+end)
 
 -- Combat Tab Options
 AddToggle(CombatP, "Enable Aimbot", Config.Aimbot, "Enabled")
@@ -481,13 +531,14 @@ local function GetClosestPlayer()
                     
                     -- Wall check
                     if Config.Aimbot.WallCheck then
-                        local ray = Ray.new(Camera.CFrame.Position, (targetPart.Position - Camera.CFrame.Position).Unit * 1000)
-                        local hit, position = Workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character, v.Character})
-                        if hit then
-                            local hitPlayer = Players:GetPlayerFromCharacter(hit.Parent)
-                            if hitPlayer ~= v then
-                                continue
-                            end
+                        local rayParams = RaycastParams.new()
+                        rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+                        rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+                        rayParams.IgnoreWater = true
+
+                        local raycastResult = Workspace:Raycast(Camera.CFrame.Position, (targetPart.Position - Camera.CFrame.Position), rayParams)
+                        if raycastResult and not v.Character:IsAncestorOf(raycastResult.Instance) then
+                            continue
                         end
                     end
 
@@ -684,7 +735,8 @@ UserInputService.TextBoxFocusReleased:Connect(function()
 end)
 
 -- Input Handling
-UserInputService.InputBegan:Connect(function(Input)
+UserInputService.InputBegan:Connect(function(Input, gameProcessed)
+    if gameProcessed then return end
     if not Typing and Config.Aimbot.Enabled then
         local keyMatches = false
         
@@ -713,7 +765,8 @@ UserInputService.InputBegan:Connect(function(Input)
     end
 end)
 
-UserInputService.InputEnded:Connect(function(Input)
+UserInputService.InputEnded:Connect(function(Input, gameProcessed)
+    if gameProcessed then return end
     if not Typing and Config.Aimbot.Enabled and not Config.Aimbot.Toggle then
         local keyMatches = false
         
@@ -763,7 +816,7 @@ RunService.RenderStepped:Connect(function()
         if Aimbot.Locked and Aimbot.Locked.Character and Aimbot.Locked.Character:FindFirstChild(Config.Aimbot.LockPart) then
             local targetPart = Aimbot.Locked.Character[Config.Aimbot.LockPart]
             
-            if Config.Aimbot.ThirdPerson then
+            if Config.Aimbot.ThirdPerson and mousemoverel then
                 local Vector = Camera:WorldToViewportPoint(targetPart.Position)
                 mousemoverel(
                     (Vector.X - UserInputService:GetMouseLocation().X) * Config.Aimbot.ThirdPersonSensitivity,
@@ -788,7 +841,7 @@ RunService.RenderStepped:Connect(function()
     if Config.Triggerbot.Enabled then
         local target = Mouse.Target
         if target then
-            local character = target.Parent
+            local character = target:FindFirstAncestorOfClass("Model")
             if character and character:FindFirstChild("Humanoid") then
                 local player = Players:GetPlayerFromCharacter(character)
                 if player and player ~= LocalPlayer then
@@ -802,7 +855,7 @@ RunService.RenderStepped:Connect(function()
                                 VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 1)
                                 task.wait(0.02)
                                 VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 1)
-                                task.wait(Config.Triggerbot.Delay)
+                                task.wait(mathclamp(Config.Triggerbot.Delay, 0, 1))
                             end
                         else
                             -- Team check yok
@@ -810,7 +863,7 @@ RunService.RenderStepped:Connect(function()
                             VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 1)
                             task.wait(0.02)
                             VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 1)
-                            task.wait(Config.Triggerbot.Delay)
+                            task.wait(mathclamp(Config.Triggerbot.Delay, 0, 1))
                         end
                     end
                 end
@@ -944,9 +997,13 @@ RunService.RenderStepped:Connect(function()
         Lighting.ClockTime = 14
         Lighting.GlobalShadows = false
         Lighting.FogEnd = 100000
-    else
-        Lighting.Brightness = 1
-        Lighting.GlobalShadows = true
+        fullbrightApplied = true
+    elseif fullbrightApplied then
+        Lighting.Brightness = DefaultLighting.Brightness
+        Lighting.ClockTime = DefaultLighting.ClockTime
+        Lighting.GlobalShadows = DefaultLighting.GlobalShadows
+        Lighting.FogEnd = DefaultLighting.FogEnd
+        fullbrightApplied = false
     end
 end)
 
@@ -955,6 +1012,10 @@ StartAntiAim()
 
 -- Open default page
 OpenPage("Combat")
+
+if not mousemoverel then
+    warn("[KilHub] mousemoverel desteği yok, ThirdPerson aimbot devre dışı kalabilir.")
+end
 
 print("[[ KilHub V7.6 FINAL Yüklendi! ]]")
 print("→ Aimbot tüm oyunculara kilitlenir")
