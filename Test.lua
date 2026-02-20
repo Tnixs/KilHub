@@ -3,16 +3,16 @@
 -- [[ Features: Full Aimbot, Triggerbot, Anti-Aim, Strafe, Working ESP ]]
 
 --// Cache
-local select = select
-local pcall, getgenv, next, Vector2, mathclamp, type, mousemoverel = select(1, pcall, getgenv, next, Vector2.new, math.clamp, type, mousemoverel or (Input and Input.MouseMove))
+local pcall = pcall
+local next = next
+local Vector2 = Vector2.new
+local mathclamp = math.clamp
 local mathfloor = math.floor
 local mathcos = math.cos
 local mathsin = math.sin
 local mathrandom = math.random
 local mathrad = math.rad
-local mathhuge = math.huge
-local tableinsert = table.insert
-local tablesort = table.sort
+local mousemoverel = mousemoverel or (Input and Input.MouseMove)
 
 --// Services
 local RunService = game:GetService("RunService")
@@ -41,7 +41,8 @@ local Config = {
         ThirdPersonSensitivity = 3,
         TriggerKey = "MouseButton2", -- Varsayılan sağ tık
         Toggle = false,
-        LockPart = "Head"
+        LockPart = "Head",
+        MaxDistance = 1000
     },
     FOV = {
         Enabled = true,
@@ -77,7 +78,9 @@ local Config = {
         Health = false,
         Distance = false,
         Tracers = false,
-        Color = Color3.fromRGB(255, 140, 0)
+        Color = Color3.fromRGB(255, 140, 0),
+        TeamCheck = false,
+        MaxDistance = 1500
     },
     Misc = {
         Fullbright = false
@@ -106,6 +109,14 @@ local antiAimConnection = nil
 local strafeAngle = 0
 local strafeTime = 0
 
+local DefaultLighting = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    GlobalShadows = Lighting.GlobalShadows,
+    FogEnd = Lighting.FogEnd
+}
+local fullbrightApplied = false
+
 --// UI Theme
 local Theme = {
     Main = Color3.fromRGB(15, 15, 15),
@@ -118,10 +129,15 @@ local Theme = {
 --== UI CREATION ==--
 --====================================================
 
+local ExistingGui = (game:GetService("CoreGui"):FindFirstChild("KilHub_V7_6") or LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("KilHub_V7_6"))
+if ExistingGui then
+    ExistingGui:Destroy()
+end
+
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "KilHub_V7_6"
 ScreenGui.ResetOnSpawn = false
-ScreenGui.Parent = game:GetService("CoreGui") or LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.Parent = game:GetService("CoreGui")
 
 -- Menu Frame
 local Main = Instance.new("Frame", ScreenGui)
@@ -174,7 +190,10 @@ local function OpenPage(name)
             v.Visible = false
         end
     end
-    Container:FindFirstChild(name .. "Page").Visible = true
+    local page = Container:FindFirstChild(name .. "Page")
+    if page then
+        page.Visible = true
+    end
 end
 
 local function CreateTab(name, order)
@@ -271,6 +290,7 @@ local function AddSlider(parent, text, configTable, configKey, min, max, suffix,
     Button.Text = ""
     
     local dragging = false
+    local dragConnection
     Button.MouseButton1Down:Connect(function()
         dragging = true
     end)
@@ -280,8 +300,13 @@ local function AddSlider(parent, text, configTable, configKey, min, max, suffix,
             dragging = false
         end
     end)
-    
-    RunService.RenderStepped:Connect(function()
+
+    dragConnection = RunService.RenderStepped:Connect(function()
+        if not F.Parent then
+            dragConnection:Disconnect()
+            return
+        end
+
         if dragging then
             local mousePos = UserInputService:GetMouseLocation()
             local absPos = Slider.AbsolutePosition
@@ -295,6 +320,8 @@ local function AddSlider(parent, text, configTable, configKey, min, max, suffix,
         end
     end)
 end
+
+local openDropdown
 
 local function AddDropdown(parent, text, configTable, configKey, options)
     local F = Instance.new("Frame", parent)
@@ -329,7 +356,13 @@ local function AddDropdown(parent, text, configTable, configKey, options)
         if dropdownOpen then
             if dropdownFrame then dropdownFrame:Destroy() end
             dropdownOpen = false
+            openDropdown = nil
             return
+        end
+
+        if openDropdown and openDropdown ~= dropdownFrame then
+            openDropdown:Destroy()
+            openDropdown = nil
         end
         
         dropdownFrame = Instance.new("Frame", ScreenGui)
@@ -360,9 +393,29 @@ local function AddDropdown(parent, text, configTable, configKey, options)
             end)
         end
         
+        openDropdown = dropdownFrame
         dropdownOpen = true
     end)
 end
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+    if openDropdown and openDropdown.Parent then
+        local mousePos = UserInputService:GetMouseLocation()
+        local pos = openDropdown.AbsolutePosition
+        local size = openDropdown.AbsoluteSize
+
+        local insideX = mousePos.X >= pos.X and mousePos.X <= (pos.X + size.X)
+        local insideY = mousePos.Y >= pos.Y and mousePos.Y <= (pos.Y + size.Y)
+        if insideX and insideY then
+            return
+        end
+
+        openDropdown:Destroy()
+        openDropdown = nil
+    end
+end)
 
 -- Combat Tab Options
 AddToggle(CombatP, "Enable Aimbot", Config.Aimbot, "Enabled")
@@ -375,6 +428,7 @@ AddDropdown(CombatP, "Trigger Key", Config.Aimbot, "TriggerKey",
     {"MouseButton1", "MouseButton2", "MouseButton3", "LeftControl", "X", "C", "V", "LeftAlt", "LeftShift", "Q", "E", "R", "F"})
 AddToggle(CombatP, "Toggle Mode", Config.Aimbot, "Toggle")
 AddDropdown(CombatP, "Lock Part", Config.Aimbot, "LockPart", {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"})
+AddSlider(CombatP, "Max Target Distance", Config.Aimbot, "MaxDistance", 100, 3000, "")
 
 AddToggle(CombatP, "Enable FOV", Config.FOV, "Enabled")
 AddToggle(CombatP, "Show FOV", Config.FOV, "Visible")
@@ -403,6 +457,8 @@ AddToggle(VisualsP, "Name ESP", Config.ESP, "Names")
 AddToggle(VisualsP, "Health Bar", Config.ESP, "Health")
 AddToggle(VisualsP, "Show Distance", Config.ESP, "Distance")
 AddToggle(VisualsP, "Tracer Lines", Config.ESP, "Tracers")
+AddToggle(VisualsP, "ESP Team Check", Config.ESP, "TeamCheck")
+AddSlider(VisualsP, "ESP Max Distance", Config.ESP, "MaxDistance", 100, 5000, "")
 
 -- Misc Tab
 AddToggle(MiscP, "Fullbright", Config.Misc, "Fullbright")
@@ -442,6 +498,33 @@ local function CancelLock()
     FOVCircle.Color = Config.FOV.Color
 end
 
+local function GetTargetPart(character)
+    if not character then return nil end
+
+    local primary = character:FindFirstChild(Config.Aimbot.LockPart)
+    if primary then return primary end
+
+    return character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+        or character:FindFirstChild("LowerTorso")
+end
+
+local function IsVisibleFromCamera(targetPart, character)
+    if not Config.Aimbot.WallCheck then return true end
+    if not targetPart or not character then return false end
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    rayParams.IgnoreWater = true
+
+    local direction = (targetPart.Position - Camera.CFrame.Position)
+    local raycastResult = Workspace:Raycast(Camera.CFrame.Position, direction, rayParams)
+    return (not raycastResult) or character:IsAncestorOf(raycastResult.Instance)
+end
+
 local function IsTargetValid(player)
     if player == LocalPlayer then return false end
     if not player.Character then return false end
@@ -453,14 +536,16 @@ local function IsTargetValid(player)
     local rootPart = player.Character:FindFirstChild("HumanoidRootPart") or player.Character:FindFirstChild("Torso")
     if not rootPart then return false end
     
-    local targetPart = player.Character:FindFirstChild(Config.Aimbot.LockPart)
+    if (rootPart.Position - Camera.CFrame.Position).Magnitude > Config.Aimbot.MaxDistance then return false end
+
+    local targetPart = GetTargetPart(player.Character)
     if not targetPart then return false end
-    
+
     -- Team check
     if Config.Aimbot.TeamCheck and player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
         return false
     end
-    
+
     return true
 end
 
@@ -473,22 +558,16 @@ local function GetClosestPlayer()
 
         for _, v in next, Players:GetPlayers() do
             if IsTargetValid(v) then
-                local targetPart = v.Character[Config.Aimbot.LockPart]
+                local targetPart = GetTargetPart(v.Character)
+                if not targetPart then continue end
+
                 local Vector, OnScreen = Camera:WorldToViewportPoint(targetPart.Position)
                 
                 if OnScreen then
                     local Distance = (mousePos - Vector2(Vector.X, Vector.Y)).Magnitude
                     
-                    -- Wall check
-                    if Config.Aimbot.WallCheck then
-                        local ray = Ray.new(Camera.CFrame.Position, (targetPart.Position - Camera.CFrame.Position).Unit * 1000)
-                        local hit, position = Workspace:FindPartOnRayWithIgnoreList(ray, {LocalPlayer.Character, v.Character})
-                        if hit then
-                            local hitPlayer = Players:GetPlayerFromCharacter(hit.Parent)
-                            if hitPlayer ~= v then
-                                continue
-                            end
-                        end
+                    if not IsVisibleFromCamera(targetPart, v.Character) then
+                        continue
                     end
 
                     if Distance < closestDist then
@@ -504,11 +583,21 @@ local function GetClosestPlayer()
             Aimbot.RequiredDistance = closestDist
         end
     elseif Aimbot.Locked and IsTargetValid(Aimbot.Locked) then
-        local targetPart = Aimbot.Locked.Character[Config.Aimbot.LockPart]
-        local targetPos = Camera:WorldToViewportPoint(targetPart.Position)
+        local targetPart = GetTargetPart(Aimbot.Locked.Character)
+        if not targetPart or not IsVisibleFromCamera(targetPart, Aimbot.Locked.Character) then
+            CancelLock()
+            return
+        end
+
+        local targetPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+        if not onScreen then
+            CancelLock()
+            return
+        end
+
         local mousePos = Vector2(UserInputService:GetMouseLocation().X, UserInputService:GetMouseLocation().Y)
         local currentDist = (mousePos - Vector2(targetPos.X, targetPos.Y)).Magnitude
-        
+
         -- Eğer hedef FOV dışına çıkarsa kilidi bırak
         if currentDist > (Config.FOV.Enabled and Config.FOV.Amount or 2000) * 1.2 then
             CancelLock()
@@ -684,7 +773,8 @@ UserInputService.TextBoxFocusReleased:Connect(function()
 end)
 
 -- Input Handling
-UserInputService.InputBegan:Connect(function(Input)
+UserInputService.InputBegan:Connect(function(Input, gameProcessed)
+    if gameProcessed then return end
     if not Typing and Config.Aimbot.Enabled then
         local keyMatches = false
         
@@ -713,7 +803,8 @@ UserInputService.InputBegan:Connect(function(Input)
     end
 end)
 
-UserInputService.InputEnded:Connect(function(Input)
+UserInputService.InputEnded:Connect(function(Input, gameProcessed)
+    if gameProcessed then return end
     if not Typing and Config.Aimbot.Enabled and not Config.Aimbot.Toggle then
         local keyMatches = false
         
@@ -760,10 +851,11 @@ RunService.RenderStepped:Connect(function()
     if Aimbot.Running and Config.Aimbot.Enabled then
         GetClosestPlayer()
         
-        if Aimbot.Locked and Aimbot.Locked.Character and Aimbot.Locked.Character:FindFirstChild(Config.Aimbot.LockPart) then
-            local targetPart = Aimbot.Locked.Character[Config.Aimbot.LockPart]
-            
-            if Config.Aimbot.ThirdPerson then
+        if Aimbot.Locked and Aimbot.Locked.Character then
+            local targetPart = GetTargetPart(Aimbot.Locked.Character)
+            if not targetPart then
+                CancelLock()
+            elseif Config.Aimbot.ThirdPerson and mousemoverel then
                 local Vector = Camera:WorldToViewportPoint(targetPart.Position)
                 mousemoverel(
                     (Vector.X - UserInputService:GetMouseLocation().X) * Config.Aimbot.ThirdPersonSensitivity,
@@ -772,8 +864,8 @@ RunService.RenderStepped:Connect(function()
             else
                 if Config.Aimbot.Sensitivity > 0 then
                     if Aimbot.Animation then Aimbot.Animation:Cancel() end
-                    Aimbot.Animation = TweenService:Create(Camera, 
-                        TweenInfo.new(Config.Aimbot.Sensitivity, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), 
+                    Aimbot.Animation = TweenService:Create(Camera,
+                        TweenInfo.new(Config.Aimbot.Sensitivity, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
                         {CFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)}
                     )
                     Aimbot.Animation:Play()
@@ -786,31 +878,33 @@ RunService.RenderStepped:Connect(function()
     
     -- Triggerbot
     if Config.Triggerbot.Enabled then
-        local target = Mouse.Target
-        if target then
-            local character = target.Parent
+        local screenCenter = Vector2(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        local unitRay = Camera:ViewportPointToRay(screenCenter.X, screenCenter.Y)
+
+        local rayParams = RaycastParams.new()
+        rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+        rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+        rayParams.IgnoreWater = true
+
+        local raycastResult = Workspace:Raycast(unitRay.Origin, unitRay.Direction * 1000, rayParams)
+        if raycastResult and raycastResult.Instance then
+            local character = raycastResult.Instance:FindFirstAncestorOfClass("Model")
             if character and character:FindFirstChild("Humanoid") then
                 local player = Players:GetPlayerFromCharacter(character)
                 if player and player ~= LocalPlayer then
                     local humanoid = character:FindFirstChildOfClass("Humanoid")
                     if humanoid and humanoid.Health > 0 then
-                        -- Team check
-                        if Config.Triggerbot.TeamCheck then
-                            if not (player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team) then
-                                -- Ateş et
-                                local mousePos = UserInputService:GetMouseLocation()
-                                VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 1)
-                                task.wait(0.02)
-                                VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 1)
-                                task.wait(Config.Triggerbot.Delay)
-                            end
-                        else
-                            -- Team check yok
-                            local mousePos = UserInputService:GetMouseLocation()
-                            VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, true, game, 1)
+                        local canShoot = true
+
+                        if Config.Triggerbot.TeamCheck and player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team then
+                            canShoot = false
+                        end
+
+                        if canShoot then
+                            VirtualInputManager:SendMouseButtonEvent(screenCenter.X, screenCenter.Y, 0, true, game, 1)
                             task.wait(0.02)
-                            VirtualInputManager:SendMouseButtonEvent(mousePos.X, mousePos.Y, 0, false, game, 1)
-                            task.wait(Config.Triggerbot.Delay)
+                            VirtualInputManager:SendMouseButtonEvent(screenCenter.X, screenCenter.Y, 0, false, game, 1)
+                            task.wait(mathclamp(Config.Triggerbot.Delay, 0, 1))
                         end
                     end
                 end
@@ -830,12 +924,26 @@ RunService.RenderStepped:Connect(function()
             local head = character:FindFirstChild("Head")
             
             if humanoid and rootPart and head then
+                local sameTeam = player.Team and LocalPlayer.Team and player.Team == LocalPlayer.Team
+                local alive = humanoid.Health > 0
+                local distance = (Camera.CFrame.Position - rootPart.Position).Magnitude
+
+                if (Config.ESP.TeamCheck and sameTeam) or distance > Config.ESP.MaxDistance then
+                    drawings.Box.Visible = false
+                    drawings.Name.Visible = false
+                    drawings.Health.Visible = false
+                    drawings.HealthBg.Visible = false
+                    drawings.Distance.Visible = false
+                    drawings.Tracer.Visible = false
+                    continue
+                end
+
                 local pos, onScreen = Camera:WorldToViewportPoint(rootPart.Position)
                 local headPos, headOnScreen = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 1, 0))
-                local distance = (Camera.CFrame.Position - rootPart.Position).Magnitude
-                
+
                 -- Box boyutunu hesapla (mesafeye göre)
-                local boxHeight = mathclamp(5000 / distance, 20, 200)
+                local safeDistance = math.max(distance, 1)
+                local boxHeight = mathclamp(5000 / safeDistance, 20, 200)
                 local boxWidth = boxHeight * 0.6
                 
                 -- Box ESP
@@ -860,7 +968,7 @@ RunService.RenderStepped:Connect(function()
                 
                 -- Health Bar - DÜZELTİLDİ
                 if Config.ESP.Health and onScreen and humanoid.Health > 0 then
-                    local healthPercent = humanoid.Health / humanoid.MaxHealth
+                    local healthPercent = mathclamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
                     
                     -- Arkaplan
                     drawings.HealthBg.Visible = true
@@ -902,7 +1010,8 @@ RunService.RenderStepped:Connect(function()
                         drawings.Tracer.To = Vector2.new(pos.X, pos.Y)
                     else
                         -- Ekranda değilse kenara çiz
-                        local direction = (Vector2.new(pos.X, pos.Y) - Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)).Unit
+                        local rawDirection = (Vector2.new(pos.X, pos.Y) - Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2))
+                        local direction = rawDirection.Magnitude > 0 and rawDirection.Unit or Vector2(0, -1)
                         local screenPoint = Vector2.new(
                             Camera.ViewportSize.X / 2 + direction.X * Camera.ViewportSize.X,
                             Camera.ViewportSize.Y / 2 + direction.Y * Camera.ViewportSize.Y
@@ -944,9 +1053,13 @@ RunService.RenderStepped:Connect(function()
         Lighting.ClockTime = 14
         Lighting.GlobalShadows = false
         Lighting.FogEnd = 100000
-    else
-        Lighting.Brightness = 1
-        Lighting.GlobalShadows = true
+        fullbrightApplied = true
+    elseif fullbrightApplied then
+        Lighting.Brightness = DefaultLighting.Brightness
+        Lighting.ClockTime = DefaultLighting.ClockTime
+        Lighting.GlobalShadows = DefaultLighting.GlobalShadows
+        Lighting.FogEnd = DefaultLighting.FogEnd
+        fullbrightApplied = false
     end
 end)
 
@@ -955,6 +1068,10 @@ StartAntiAim()
 
 -- Open default page
 OpenPage("Combat")
+
+if not mousemoverel then
+    warn("[KilHub] mousemoverel desteği yok, ThirdPerson aimbot devre dışı kalabilir.")
+end
 
 print("[[ KilHub V7.6 FINAL Yüklendi! ]]")
 print("→ Aimbot tüm oyunculara kilitlenir")
